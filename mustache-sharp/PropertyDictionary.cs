@@ -2,6 +2,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Dynamic;
 using System.Linq;
 using System.Reflection;
 
@@ -58,10 +59,49 @@ namespace Mustache
                 {
                     typeCache.Add(fieldInfo.Name, i => fieldInfo.GetValue(i));
                 }
+
+                var dynamicMembers = getDynamicMembers(instance);
+                foreach (KeyValuePair<string, object> member in dynamicMembers)
+                {
+                    typeCache.Add(member.Key, i => member.Value);
+                }
                 
                 _cache.Add(type, typeCache);
             }
             return typeCache;
+        }
+
+        private static IEnumerable<KeyValuePair<string, object>> getDynamicMembers(object instance)
+        {
+            Dictionary<string, object> members = new Dictionary<string, object>();
+
+            Type type = instance.GetType();
+            Type baseType = type.BaseType;
+            bool isDynamicObject = false;
+
+            if (baseType == null)
+                return members;
+
+            while (baseType != baseType.BaseType && baseType.BaseType != null)
+            {
+                isDynamicObject = (baseType.FullName == "System.Dynamic.DynamicObject");
+                if (isDynamicObject)
+                    break;
+                else
+                    baseType = baseType.BaseType;
+            }
+
+            if (isDynamicObject)
+            {
+                DynamicObject dynamicInstance = (DynamicObject)instance;
+                dynamic dynamicObject = dynamicInstance;
+
+                foreach (string member in dynamicInstance.GetDynamicMemberNames())
+                {
+                    members.Add(member, Dynamitey.Dynamic.InvokeGet(instance, member));
+                }
+            }
+            return members;
         }
 
         private static IEnumerable<TMember> getMembers<TMember>(Type type, IEnumerable<TMember> members)
