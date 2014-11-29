@@ -16,6 +16,7 @@ namespace Mustache
         private static readonly Dictionary<Type, Dictionary<string, Func<object, object>>> _cache = new Dictionary<Type, Dictionary<string, Func<object, object>>>();
 
         private readonly object _instance;
+        private readonly bool _isDynamicObject;
         private readonly Dictionary<string, Func<object, object>> _typeCache;
 
         /// <summary>
@@ -31,6 +32,7 @@ namespace Mustache
             }
             else
             {
+                _isDynamicObject = isDynamicObject(_instance);
                 lock (_cache)
                 {
                     _typeCache = getCacheType(_instance);
@@ -60,29 +62,25 @@ namespace Mustache
                     typeCache.Add(fieldInfo.Name, i => fieldInfo.GetValue(i));
                 }
 
-                var dynamicMembers = getDynamicMembers(instance);
-                foreach (KeyValuePair<string, object> member in dynamicMembers)
-                {
-                    typeCache.Add(member.Key, i => member.Value);
-                }
+                //Disable cache of dynamic members, does not refresh for mutated objects of the same base type derived from DynamicObject:
+                //var dynamicMembers = getDynamicMembers(instance);
+                //foreach (KeyValuePair<string, object> member in dynamicMembers)
+                //{
+                //    typeCache[member.Key] = (i => member.Value);
+                //}
                 
                 _cache.Add(type, typeCache);
             }
             return typeCache;
         }
 
-        private static IEnumerable<KeyValuePair<string, object>> getDynamicMembers(object instance)
+        private static bool isDynamicObject(object instance)
         {
-            Dictionary<string, object> members = new Dictionary<string, object>();
-
             Type type = instance.GetType();
             Type baseType = type.BaseType;
             bool isDynamicObject = false;
 
-            if (baseType == null)
-                return members;
-
-            while (baseType != baseType.BaseType && baseType.BaseType != null)
+            while (baseType.BaseType != null)
             {
                 isDynamicObject = (baseType.FullName == "System.Dynamic.DynamicObject");
                 if (isDynamicObject)
@@ -91,17 +89,24 @@ namespace Mustache
                     baseType = baseType.BaseType;
             }
 
-            if (isDynamicObject)
-            {
-                DynamicObject dynamicInstance = (DynamicObject)instance;
-                dynamic dynamicObject = dynamicInstance;
+            return isDynamicObject;
+        }
 
-                foreach (string member in dynamicInstance.GetDynamicMemberNames())
-                {
-                    members.Add(member, Dynamitey.Dynamic.InvokeGet(instance, member));
-                }
+        private static IEnumerable<KeyValuePair<string, Func<object, object>>> getDynamicMembers(object instance)
+        {
+            Dictionary<string, Func<object, object>> members = new Dictionary<string, Func<object, object>>();
+            DynamicObject dynamicInstance = (DynamicObject)instance;
+            foreach (string member in dynamicInstance.GetDynamicMemberNames())
+            {
+                members.Add(member, getDynamicMemberValueGetter(instance, member));
             }
             return members;
+        }
+
+        private static Func<object, object> getDynamicMemberValueGetter(object instance, string memberName)
+        {
+            DynamicObject dynamicInstance = (DynamicObject)instance;
+            return i => Dynamitey.Dynamic.InvokeGet(i, memberName);
         }
 
         private static IEnumerable<TMember> getMembers<TMember>(Type type, IEnumerable<TMember> members)
@@ -156,7 +161,10 @@ namespace Mustache
         /// <returns>True if the property exists; otherwise, false.</returns>
         public bool ContainsKey(string key)
         {
-            return _typeCache.ContainsKey(key);
+            if (_isDynamicObject)
+                return ((DynamicObject)_instance).GetDynamicMemberNames().Contains(key);
+            else
+                return _typeCache.ContainsKey(key);
         }
 
         /// <summary>
@@ -164,7 +172,13 @@ namespace Mustache
         /// </summary>
         public ICollection<string> Keys
         {
-            get { return _typeCache.Keys; }
+            get
+            {
+                if (_isDynamicObject)
+                    return ((DynamicObject)_instance).GetDynamicMemberNames().ToArray();
+                else
+                    return _typeCache.Keys;
+            }
         }
 
         [EditorBrowsable(EditorBrowsableState.Never)]
@@ -183,10 +197,22 @@ namespace Mustache
         public bool TryGetValue(string key, out object value)
         {
             Func<object, object> getter;
-            if (!_typeCache.TryGetValue(key, out getter))
+            if (_isDynamicObject)
             {
-                value = null;
-                return false;
+                if (!((DynamicObject)_instance).GetDynamicMemberNames().Contains(key))
+                {
+                    value = null;
+                    return false;
+                }
+                getter = getDynamicMemberValueGetter(_instance, key);
+            }
+            else
+            {
+                if (!_typeCache.TryGetValue(key, out getter))
+                {
+                    value = null;
+                    return false;
+                }
             }
             value = getter(_instance);
             return true;
@@ -199,12 +225,23 @@ namespace Mustache
         {
             get
             {
-                ICollection<Func<object, object>> getters = _typeCache.Values;
                 List<object> values = new List<object>();
-                foreach (Func<object, object> getter in getters)
+                if (_isDynamicObject)
                 {
-                    object value = getter(_instance);
-                    values.Add(value);
+                    foreach (KeyValuePair<string, Func<object, object>> member in getDynamicMembers(_instance))
+                    {
+                        object value = member.Value(_instance);
+                        values.Add(value);
+                    }
+                }
+                else
+                {
+                    ICollection<Func<object, object>> getters = _typeCache.Values;
+                    foreach (Func<object, object> getter in getters)
+                    {
+                        object value = getter(_instance);
+                        values.Add(value);
+                    }
                 }
                 return values.AsReadOnly();
             }
@@ -225,8 +262,16 @@ namespace Mustache
         {
             get
             {
-                Func<object, object> getter = _typeCache[key];
-                return getter(_instance);
+                if (_isDynamicObject)
+                {
+                    Func<object, object> getter = getDynamicMemberValueGetter(_instance, key);
+                    return getter(_instance);
+                }
+                else
+                {
+                    Func<object, object> getter = _typeCache[key];
+                    return getter(_instance);
+                }
             }
             [EditorBrowsable(EditorBrowsableState.Never)]
             set
@@ -250,9 +295,20 @@ namespace Mustache
         bool ICollection<KeyValuePair<string, object>>.Contains(KeyValuePair<string, object> item)
         {
             Func<object, object> getter;
-            if (!_typeCache.TryGetValue(item.Key, out getter))
+            if (_isDynamicObject)
             {
-                return false;
+                if (!((DynamicObject)_instance).GetDynamicMemberNames().Contains(item.Key))
+                {
+                    return false;
+                }
+                getter = getDynamicMemberValueGetter(_instance, item.Key);
+            }
+            else
+            {
+                if (!_typeCache.TryGetValue(item.Key, out getter))
+                {
+                    return false;
+                }
             }
             object value = getter(_instance);
             return Equals(item.Value, value);
@@ -276,7 +332,13 @@ namespace Mustache
         /// </summary>
         public int Count
         {
-            get { return _typeCache.Count; }
+            get
+            {
+                if (_isDynamicObject)
+                    return ((DynamicObject)_instance).GetDynamicMemberNames().Count();
+                else
+                    return _typeCache.Count;
+            }
         }
 
         /// <summary>
@@ -294,16 +356,28 @@ namespace Mustache
         }
 
         /// <summary>
-        /// Gets the propety name/value pairs in the object.
+        /// Gets the property name/value pairs in the object.
         /// </summary>
         /// <returns></returns>
         public IEnumerator<KeyValuePair<string, object>> GetEnumerator()
         {
-            foreach (KeyValuePair<string, Func<object, object>> pair in _typeCache)
+            if (_isDynamicObject)
             {
-                Func<object, object> getter = pair.Value;
-                object value = getter(_instance);
-                yield return new KeyValuePair<string, object>(pair.Key, value);
+                foreach (KeyValuePair<string, Func<object, object>> pair in getDynamicMembers(_instance))
+                {
+                    Func<object, object> getter = pair.Value;
+                    object value = getter(_instance);
+                    yield return new KeyValuePair<string, object>(pair.Key, value);
+                }
+            }
+            else
+            {
+                foreach (KeyValuePair<string, Func<object, object>> pair in _typeCache)
+                {
+                    Func<object, object> getter = pair.Value;
+                    object value = getter(_instance);
+                    yield return new KeyValuePair<string, object>(pair.Key, value);
+                }
             }
         }
 
