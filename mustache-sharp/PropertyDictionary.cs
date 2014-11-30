@@ -61,14 +61,7 @@ namespace Mustache
                 {
                     typeCache.Add(fieldInfo.Name, i => fieldInfo.GetValue(i));
                 }
-
-                //Disable cache of dynamic members, does not refresh for mutated objects of the same base type derived from DynamicObject:
-                //var dynamicMembers = getDynamicMembers(instance);
-                //foreach (KeyValuePair<string, object> member in dynamicMembers)
-                //{
-                //    typeCache[member.Key] = (i => member.Value);
-                //}
-                
+              
                 _cache.Add(type, typeCache);
             }
             return typeCache;
