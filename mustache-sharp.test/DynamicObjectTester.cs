@@ -106,8 +106,9 @@ namespace Mustache.Test
         /// handler to provide a substitute.
         /// </summary>
         [TestMethod]
-        public void TestDynamic_MissingKey_CallsKeyNotFoundHandler()
+        public void TestDynamic_MissingKey_CallsKeyNotFoundHandler_WithDynamic()
         {
+            dynamic d = new object();
             const string format = @"Hello, {{Name}}!!!";
             Generator generator = compiler.Compile(format);
             generator.KeyNotFound += (obj, args) =>
@@ -115,7 +116,7 @@ namespace Mustache.Test
                 args.Substitute = "Unknown";
                 args.Handled = true;
             };
-            string actual = generator.Render(new object());
+            string actual = generator.Render(d);
             string expected = "Hello, Unknown!!!";
             Assert.AreEqual(expected, actual, "The wrong message was generated.");
         }
