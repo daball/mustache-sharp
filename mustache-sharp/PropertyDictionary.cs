@@ -73,6 +73,9 @@ namespace Mustache
             Type baseType = type.BaseType;
             bool isDynamicObject = false;
 
+            if (baseType == null)
+                return false;
+
             while (baseType.BaseType != null)
             {
                 isDynamicObject = (baseType.FullName == "System.Dynamic.DynamicObject");
@@ -96,10 +99,30 @@ namespace Mustache
             return members;
         }
 
+        private static dynamic invokeGetMember(object instance, string memberName)
+        {
+            Type t = instance.GetType();
+            MemberInfo[] query = t.GetMember(memberName);
+            Binder binder = null;
+            if (query.Length > 0)
+            {
+                MemberInfo info = query[0];
+                switch (info.MemberType)
+                {
+                    case MemberTypes.Field:
+                        return t.InvokeMember(memberName, BindingFlags.GetField, binder, instance, null);
+                    case MemberTypes.Property:
+                        return t.InvokeMember(memberName, BindingFlags.GetProperty, binder, instance, null);
+                    default:
+                        return t.InvokeMember(memberName, BindingFlags.Default, binder, instance, null);
+                }
+            }
+            return null;
+        }
+
         private static Func<object, object> getDynamicMemberValueGetter(object instance, string memberName)
         {
-            DynamicObject dynamicInstance = (DynamicObject)instance;
-            return i => Dynamitey.Dynamic.InvokeGet(i, memberName);
+            return i => invokeGetMember(i, memberName);
         }
 
         private static IEnumerable<TMember> getMembers<TMember>(Type type, IEnumerable<TMember> members)

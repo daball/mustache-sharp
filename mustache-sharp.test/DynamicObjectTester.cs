@@ -85,9 +85,39 @@ namespace Mustache.Test
         #endregion
 
         [TestMethod]
-        public void TestDynamicObjectRender()
+        public void TestDynamic_Render()
         {
             Assert.AreEqual(desiredTestOutput, compiler.Compile(testMustacheTemplate).Render(testDynamicObject));
+        }
+
+        /// <summary>
+        /// If we try to print a key that doesn't exist, an exception should be thrown.
+        /// </summary>
+        [TestMethod]
+        [ExpectedException(typeof(KeyNotFoundException))]
+        public void TestDynamic_KeyNotFoundException_WithDynamic()
+        {
+            dynamic d = new object();
+            compiler.Compile(testMustacheTemplate).Render(d);
+        }
+
+        /// <summary>
+        /// If we try to print a key that doesn't exist, we can provide a
+        /// handler to provide a substitute.
+        /// </summary>
+        [TestMethod]
+        public void TestDynamic_MissingKey_CallsKeyNotFoundHandler()
+        {
+            const string format = @"Hello, {{Name}}!!!";
+            Generator generator = compiler.Compile(format);
+            generator.KeyNotFound += (obj, args) =>
+            {
+                args.Substitute = "Unknown";
+                args.Handled = true;
+            };
+            string actual = generator.Render(new object());
+            string expected = "Hello, Unknown!!!";
+            Assert.AreEqual(expected, actual, "The wrong message was generated.");
         }
     }
 }
